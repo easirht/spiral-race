@@ -2,9 +2,9 @@
 import math
 import random
 
-TOTAL_CELLS = 75
-N_BOOST = 8
-N_TRAP = 8
+TOTAL_CELLS = 50
+N_BOOST = 6
+N_TRAP = 6
 
 
 class Cell:
@@ -16,13 +16,13 @@ class Cell:
 
 
 class Board:
-    def __init__(self, center_x, center_y, r_start=310, r_end=55, turns=3.5):
+    def __init__(self, center_x, center_y, r_start=310, r_end=62, turns=2.5):
         self.cx = center_x
         self.cy = center_y
         self.cells = []
 
         # Spiral from the outside (theta_max) to the inner ring (theta = 0).
-        # Cells 1..74 sit on the spiral at equal distances, cell 75 is the core.
+        # Cells 1..49 sit on the spiral at equal distances, cell 50 is the core.
         theta_max = turns * 2 * math.pi
         b = (r_start - r_end) / theta_max
 
@@ -44,7 +44,7 @@ class Board:
             samples.append(p)
         total = cumulative[-1]
 
-        n_path = TOTAL_CELLS - 1  # 74 cells on the spiral
+        n_path = TOTAL_CELLS - 1  # 49 cells on the spiral
         gap = total / (n_path - 1)
         idx = 0
         for i in range(n_path):
@@ -54,7 +54,7 @@ class Board:
             x, y = samples[idx]
             self.cells.append(Cell(i + 1, 0, x, y))
 
-        # Cell 75 = core, exactly at the centre
+        # Last cell = core, exactly at the centre
         self.cells.append(Cell(TOTAL_CELLS, 0, center_x, center_y))
 
     def randomize(self, seed=None):
@@ -63,7 +63,7 @@ class Board:
         for c in self.cells:
             c.effect = 0
         n = N_BOOST + N_TRAP
-        candidates = list(range(3, TOTAL_CELLS - 1))  # cells 3..74
+        candidates = list(range(3, TOTAL_CELLS))  # cells 3..49
         rng.shuffle(candidates)
         chosen = []
         for pos in candidates:

@@ -706,7 +706,7 @@ class App:
             ("path", "Move along the spiral path"),
             ("green", "Green BOOST cells push you forward"),
             ("red", "Red TRAP cells push you backward"),
-            ("core", "Reach the Core (75) exactly to win"),
+            ("core", "Reach the Core (50) exactly to win"),
         ]
         navy = (52, 68, 112)
         for i, (kind, text) in enumerate(items):
