@@ -10,10 +10,15 @@ import ui
 from board import Board, TOTAL_CELLS
 from player import Player, PLAYER_COLORS, draw_token
 from particles import Particles
+from net import Net
 
 IS_WEB = sys.platform == "emscripten"
 if IS_WEB:
     import platform
+
+ONLINE_MENU = "ONLINE_MENU"
+ONLINE_LOBBY = "ONLINE_LOBBY"
+SITE = "https://easirht.github.io/spiral-race/"
 
 COLOR_NAMES = ["Red", "Blue", "Green", "Yellow"]
 MAX_NAME = 12
@@ -32,7 +37,8 @@ CORE_TILE = 58
 TOKEN_R = 15
 
 # Turn phases
-IDLE, ROLLING, MOVING, EFFECT_MSG, EFFECT_MOVING, END_TURN, WON = range(7)
+(IDLE, ROLLING, MOVING, EFFECT_MSG, EFFECT_MOVING,
+ END_TURN, WON, WAIT_ROLL, WAIT_TURN) = range(9)
 
 
 class App:
@@ -43,7 +49,7 @@ class App:
         self.clock = pygame.time.Clock()
 
         self.font = pygame.font.Font(None, 26)
-        self.small_font = pygame.font.Font(None, 16)
+        self.small_font = pygame.font.Font(None, 18)
         self.core_font = pygame.font.Font(None, 20)
         self.token_font = pygame.font.Font(None, 22)
         self.text_font = pygame.font.Font(None, 30)
@@ -84,14 +90,26 @@ class App:
         self.roll_btn = pygame.Rect(820, 570, 400, 70)
         self.again_btn = pygame.Rect(cx - 130, 470, 260, 64)
         self.win_menu_btn = pygame.Rect(cx - 130, 550, 260, 64)
-        self.play_btn = pygame.Rect(cx - 160, 380, 320, 64)
-        self.how_btn = pygame.Rect(cx - 160, 460, 320, 64)
-        self.exit_btn = pygame.Rect(cx - 160, 540, 320, 64)
+        self.play_btn = pygame.Rect(cx - 160, 355, 320, 64)
+        self.online_btn = pygame.Rect(cx - 160, 430, 320, 64)
+        self.how_btn = pygame.Rect(cx - 160, 505, 320, 64)
+        self.exit_btn = pygame.Rect(cx - 160, 580, 320, 64)
         self.count_rects = [pygame.Rect(195 + i * 230, 240, 200, 220) for i in range(4)]
         self.back_btn = pygame.Rect(cx - 130, 560, 260, 64)
         self.setup_back = pygame.Rect(cx - 270, 620, 250, 64)
         self.setup_start = pygame.Rect(cx + 20, 620, 250, 64)
         self.how_back = pygame.Rect(cx - 130, 610, 260, 64)
+
+        # Online menu rects
+        self.on_name = pygame.Rect(cx - 220, 160, 440, 56)
+        self.on_code = pygame.Rect(cx - 220, 280, 440, 56)
+        self.on_create = pygame.Rect(cx - 220, 370, 440, 64)
+        self.on_join = pygame.Rect(cx - 220, 450, 440, 64)
+        self.on_back = pygame.Rect(cx - 130, 610, 260, 64)
+        # Lobby rects
+        self.lb_copy = pygame.Rect(cx - 300, 525, 290, 60)
+        self.lb_start = pygame.Rect(cx + 10, 525, 290, 60)
+        self.lb_back = pygame.Rect(cx - 130, 622, 260, 64)
 
         self.particles = [[random.uniform(0, S.WIDTH), random.uniform(0, S.HEIGHT),
                            random.uniform(8, 28), random.choice([1, 2, 2, 3]),
@@ -103,9 +121,30 @@ class App:
 
         self.players = []
         self.phase = IDLE
+        self.current = 0
         self.banner_t = 0.0
         self.banner = None
         self.triggered = set()
+
+        # Online
+        self.net = Net()
+        self.online = False
+        self.me = 0
+        self.lobby = {"code": "", "players": [], "started": False}
+        self.net_name = ""
+        self.net_code = ""
+        self.net_focus = 0
+        self.net_msg = ""
+        self.inbox = []
+        self.copied_t = 0.0
+
+        if IS_WEB:
+            self.net.warm()  # wake the free server early
+            room = self.net.room_param()
+            if room:
+                self.net_code = room
+                self.net_msg = "You are invited! Type your name, then press JOIN ROOM."
+                self.state = ONLINE_MENU
 
     # ---------- decorative ----------
     def make_spiral_deco(self):
@@ -144,6 +183,20 @@ class App:
     def draw_button(self, rect, text, enabled=True, color=S.GREEN):
         ui.draw_button(self.screen, rect, text, self.head_font, enabled, color)
 
+    def draw_input(self, rect, text, placeholder, focused):
+        pygame.draw.rect(self.screen, (10, 16, 40), rect, border_radius=12)
+        border = S.GOLD if focused else (70, 92, 150)
+        pygame.draw.rect(self.screen, border, rect, 2, border_radius=12)
+        caret = "|" if (focused and int(self.time * 2) % 2 == 0) else ""
+        if text:
+            ts = self.text_font.render(text + caret, True, S.WHITE)
+        else:
+            ts = self.text_font.render(placeholder, True, (100, 115, 160))
+        self.screen.blit(ts, ts.get_rect(midleft=(rect.x + 14, rect.centery)))
+        if not text and caret:
+            cs = self.text_font.render("|", True, S.WHITE)
+            self.screen.blit(cs, cs.get_rect(midleft=(rect.x + 8, rect.centery)))
+
     # ---------- game flow ----------
     def start_game(self):
         players = []
@@ -153,12 +206,24 @@ class App:
                 name = "Computer" if row["ai"] else f"Player {i + 1}"
             players.append(Player(name, PLAYER_COLORS[COLOR_NAMES[row["color"]]], row["ai"]))
         self.players = players
+        self.online = False
+        self.inbox = []
         self.reset_game()
         self.state = S.GAME
 
-    def reset_game(self):
-        # New random BOOST/TRAP layout every game
-        self.seed = random.randrange(1 << 30)
+    def start_online_game(self, msg):
+        self.players = [
+            Player(p["name"], PLAYER_COLORS[COLOR_NAMES[int(p["color"]) % 4]], False)
+            for p in msg["players"]
+        ]
+        self.online = True
+        self.me = int(msg.get("you", 0))
+        self.inbox = []
+        self.reset_game(int(msg["seed"]))
+        self.state = S.GAME
+
+    def reset_game(self, seed=None):
+        self.seed = seed if seed is not None else random.randrange(1 << 30)
         self.board.randomize(self.seed)
         start = self.board.get_cell(0)
         for p in self.players:
@@ -181,20 +246,35 @@ class App:
     def cur(self):
         return self.players[self.current]
 
+    def my_turn_online(self):
+        return self.online and self.current == self.me
+
     def start_turn(self):
         self.phase = IDLE
         self.triggered = set()
         self.timer = AI_THINK if self.cur().is_ai else 0.0
 
     def can_roll(self):
-        return self.phase == IDLE and not self.cur().is_ai
+        if self.phase != IDLE:
+            return False
+        if self.online:
+            return self.current == self.me
+        return not self.cur().is_ai
 
     def start_roll(self):
+        if self.online:
+            self.net.send({"t": "roll"})
+            self.phase = WAIT_ROLL
+            return
+        self.begin_roll(random.randint(1, 6), self.current)
+
+    def begin_roll(self, value, idx):
+        self.current = idx
         self.phase = ROLLING
         self.timer = ROLL_TIME
         self.tick = 0.0
-        self.final_roll = random.randint(1, 6)
-        self.roller = self.cur()
+        self.final_roll = value
+        self.roller = self.players[idx]
 
     def set_banner(self, title, sub, color, dur=1.2):
         self.banner = (title, sub, color)
@@ -252,6 +332,9 @@ class App:
             self.winner = p
             self.phase = WON
             self.win_t = 0.0
+            self.inbox = []
+            if self.online and self.current == self.me:
+                self.net.send({"t": "win"})
             self.fx.burst(p.x, p.y, S.GOLD, n=70, speed=280, gravity=180, size=(3, 6), life=(0.7, 1.4))
             self.fx.burst(p.x, p.y, S.WHITE, n=30, speed=200, gravity=120, life=(0.5, 1.0))
             self.fx.ring(p.x, p.y, S.GOLD, max_r=120, life=0.9)
@@ -296,6 +379,72 @@ class App:
         self.current = (self.current + 1) % len(self.players)
         self.start_turn()
 
+    # ---------- online helpers ----------
+    def leave_online(self):
+        self.net.close()
+        self.online = False
+        self.inbox = []
+
+    def do_create(self):
+        if self.net.connecting:
+            return
+        name = self.net_name.strip() or "Player"
+        self.net_msg = ""
+        self.net.connect({"t": "create", "name": name})
+
+    def do_join(self):
+        if self.net.connecting:
+            return
+        code = self.net_code.strip().upper()
+        if len(code) != 4:
+            self.net_msg = "Enter the 4-letter room code first."
+            return
+        name = self.net_name.strip() or "Player"
+        self.net_msg = ""
+        self.net.connect({"t": "join", "code": code, "name": name})
+
+    def invite_link(self):
+        return f"{SITE}?room={self.lobby.get('code', '')}"
+
+    def handle_net(self, m):
+        t = m.get("t")
+        if t == "lobby":
+            self.lobby = m
+            self.me = int(m.get("you", 0))
+            if self.state == ONLINE_MENU:
+                self.state = ONLINE_LOBBY
+                self.net_msg = ""
+        elif t == "error":
+            self.net_msg = str(m.get("msg", "Error"))
+        elif t == "start":
+            self.start_online_game(m)
+        elif t in ("roll", "turn"):
+            self.inbox.append(m)
+        elif t == "abort":
+            self.inbox = []
+            self.online = False
+            self.net_msg = f"{m.get('name', 'A player')} left. Game stopped."
+            if self.state == S.GAME:
+                self.state = ONLINE_LOBBY
+        elif t == "closed":
+            if self.state in (S.GAME, ONLINE_LOBBY):
+                self.net_msg = "Disconnected from server."
+                self.state = ONLINE_MENU
+            self.online = False
+            self.inbox = []
+
+    def process_inbox(self):
+        if not self.inbox:
+            return
+        m = self.inbox[0]
+        if m["t"] == "roll" and self.phase in (IDLE, WAIT_ROLL):
+            self.inbox.pop(0)
+            self.begin_roll(int(m["v"]), int(m["i"]) % len(self.players))
+        elif m["t"] == "turn" and self.phase == WAIT_TURN:
+            self.inbox.pop(0)
+            self.current = int(m["i"]) % len(self.players)
+            self.start_turn()
+
     # ---------- setup helpers ----------
     def open_setup(self, n):
         self.n_humans = n
@@ -335,15 +484,28 @@ class App:
         except Exception:
             return False
 
-    def ask_name(self, i):
-        """On phones there is no keyboard for the canvas, so use a popup box."""
-        row = self.setup[i]
+    @staticmethod
+    def ask_text(title, current):
+        """Phones have no keyboard for the canvas, so use a popup box."""
         try:
-            res = platform.window.prompt("Enter name (max 12 letters):", row["name"])
+            res = platform.window.prompt(title, current)
         except Exception:
             res = None
+        return None if res is None else str(res).strip()
+
+    def ask_name(self, i):
+        row = self.setup[i]
+        res = self.ask_text("Enter name (max 12 letters):", row["name"])
         if res is not None:
-            row["name"] = str(res).strip()[:MAX_NAME]
+            row["name"] = res[:MAX_NAME]
+
+    # ---------- lobby layout ----------
+    def lobby_row(self, i):
+        return pygame.Rect(S.WIDTH // 2 - 300, 235 + i * 66, 600, 58)
+
+    def lobby_swatch(self, i, k):
+        r = self.lobby_row(i)
+        return (r.right - 190 + k * 46, r.centery)
 
     # ---------- input ----------
     @staticmethod
@@ -364,12 +526,19 @@ class App:
                 self.ev_setup(event)
             elif self.state == S.HOW_TO_PLAY:
                 self.ev_how(event)
+            elif self.state == ONLINE_MENU:
+                self.ev_online_menu(event)
+            elif self.state == ONLINE_LOBBY:
+                self.ev_lobby(event)
             elif self.state == S.GAME:
                 self.ev_game(event)
 
     def ev_menu(self, event):
         if self.clicked(event, self.play_btn):
             self.state = S.PLAYER_COUNT
+        elif self.clicked(event, self.online_btn):
+            self.net_msg = ""
+            self.state = ONLINE_MENU
         elif self.clicked(event, self.how_btn):
             self.state = S.HOW_TO_PLAY
         elif self.clicked(event, self.exit_btn):
@@ -422,28 +591,101 @@ class App:
                 event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
             self.state = S.MAIN_MENU
 
+    def ev_online_menu(self, event):
+        if self.clicked(event, self.on_back) or (
+                event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            self.leave_online()
+            self.net_msg = ""
+            self.state = S.MAIN_MENU
+            return
+        if self.clicked(event, self.on_create):
+            self.do_create()
+        elif self.clicked(event, self.on_join):
+            self.do_join()
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.on_name.collidepoint(event.pos):
+                self.net_focus = 0
+                if self.is_touch():
+                    res = self.ask_text("Enter your name (max 12 letters):", self.net_name)
+                    if res is not None:
+                        self.net_name = res[:MAX_NAME]
+            elif self.on_code.collidepoint(event.pos):
+                self.net_focus = 1
+                if self.is_touch():
+                    res = self.ask_text("Enter 4-letter room code:", self.net_code)
+                    if res is not None:
+                        self.net_code = "".join(c for c in res.upper() if c.isalpha())[:4]
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_TAB:
+                self.net_focus = 1 - self.net_focus
+            elif event.key == pygame.K_RETURN:
+                if len(self.net_code) == 4:
+                    self.do_join()
+                else:
+                    self.do_create()
+            elif event.key == pygame.K_BACKSPACE:
+                if self.net_focus == 0:
+                    self.net_name = self.net_name[:-1]
+                else:
+                    self.net_code = self.net_code[:-1]
+            elif event.unicode and event.unicode.isprintable():
+                if self.net_focus == 0:
+                    if len(self.net_name) < MAX_NAME:
+                        self.net_name += event.unicode
+                elif event.unicode.isalpha() and len(self.net_code) < 4:
+                    self.net_code += event.unicode.upper()
+
+    def ev_lobby(self, event):
+        if self.clicked(event, self.lb_back) or (
+                event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            self.leave_online()
+            self.net_msg = ""
+            self.state = S.MAIN_MENU
+            return
+        if self.clicked(event, self.lb_copy):
+            self.net.copy(self.invite_link())
+            self.copied_t = 2.0
+        elif self.clicked(event, self.lb_start):
+            if self.me == 0 and len(self.lobby.get("players", [])) >= 2:
+                self.net.send({"t": "start"})
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for k in range(4):
+                cx, cy = self.lobby_swatch(self.me, k)
+                if math.hypot(event.pos[0] - cx, event.pos[1] - cy) <= 20:
+                    self.net.send({"t": "color", "color": k})
+
     def ev_game(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                self.state = S.MAIN_MENU
+                if not self.online:
+                    self.state = S.MAIN_MENU
             elif event.key == pygame.K_SPACE:
                 if self.can_roll():
                     self.start_roll()
-                elif self.phase == WON:
+                elif self.phase == WON and not self.online:
                     self.reset_game()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.can_roll() and self.roll_btn.collidepoint(event.pos):
                 self.start_roll()
             elif self.phase == WON:
                 if self.again_btn.collidepoint(event.pos):
-                    self.reset_game()
+                    if self.online:
+                        self.state = ONLINE_LOBBY
+                    else:
+                        self.reset_game()
                 elif self.win_menu_btn.collidepoint(event.pos):
+                    if self.online:
+                        self.leave_online()
                     self.state = S.MAIN_MENU
 
     # ---------- update ----------
     def update(self, dt):
         self.time += dt
         self.update_particles(dt)
+        if self.copied_t > 0:
+            self.copied_t -= dt
+        for m in self.net.update(dt):
+            self.handle_net(m)
         if self.state != S.GAME:
             return
         self.fx.update(dt, S.HEIGHT)
@@ -457,6 +699,9 @@ class App:
             if self.win_t < CONFETTI_TIME:
                 self.fx.confetti(S.WIDTH, 3)
             return
+
+        if self.online:
+            self.process_inbox()
 
         if self.phase == IDLE:
             if self.cur().is_ai:
@@ -481,7 +726,12 @@ class App:
         elif self.phase == END_TURN:
             self.timer -= dt
             if self.timer <= 0:
-                self.next_turn()
+                if self.online:
+                    if self.current == self.me:
+                        self.net.send({"t": "done"})
+                    self.phase = WAIT_TURN
+                else:
+                    self.next_turn()
 
     # ---------- drawing: game ----------
     def draw_board(self):
@@ -556,7 +806,10 @@ class App:
                 col = theme.lighten(pl.color, 0.2 * glow)
                 pygame.draw.rect(self.screen, col, r, 3, border_radius=14)
             draw_token(self.screen, r.x + 28, r.centery - 2, pl.color, pl.initial, self.token_font, 13)
-            nm = self.text_font.render(pl.name + ("  (AI)" if pl.is_ai else ""), True, S.WHITE)
+            suffix = "  (AI)" if pl.is_ai else ""
+            if self.online and i == self.me:
+                suffix = "  (YOU)"
+            nm = self.text_font.render(pl.name + suffix, True, S.WHITE)
             self.screen.blit(nm, (r.x + 56, r.y + 14))
             ps = self.text_font.render(f"Pos {pl.position}", True, theme.lighten(pl.color, 0.3))
             self.screen.blit(ps, ps.get_rect(midright=(r.right - 16, r.centery)))
@@ -564,10 +817,14 @@ class App:
         box = pygame.Rect(840, 400, 360, 150)
         pygame.draw.rect(self.screen, (10, 16, 40), box, border_radius=18)
         pygame.draw.rect(self.screen, (70, 92, 150), box, 2, border_radius=18)
-        if self.phase == ROLLING:
+        if self.phase in (ROLLING, WAIT_ROLL):
             label = "ROLLING..."
         elif self.phase == IDLE and p.is_ai:
             label = f"{p.name.upper()} IS THINKING..."
+        elif self.phase == IDLE and self.online and self.current != self.me:
+            label = f"WAITING FOR {p.name.upper()}..."
+        elif self.phase == IDLE and self.online:
+            label = "YOUR TURN - ROLL!"
         elif self.phase == IDLE and self.dice_shown is None:
             label = "ROLL THE DICE"
         elif self.roller is not None:
@@ -577,7 +834,7 @@ class App:
         lt = self.text_font.render(label, True, S.WHITE)
         self.screen.blit(lt, lt.get_rect(center=(box.centerx, box.y + 26)))
         val = str(self.dice_shown) if self.dice_shown else "-"
-        col = S.GOLD if self.phase != ROLLING else S.WHITE
+        col = S.GOLD if self.phase not in (ROLLING, WAIT_ROLL) else S.WHITE
         n = self.big_font.render(val, True, col)
         self.screen.blit(n, n.get_rect(center=(box.centerx, box.y + 92)))
 
@@ -616,7 +873,8 @@ class App:
         self.screen.blit(n, n.get_rect(center=(S.WIDTH // 2, 380)))
         r = self.text_font.render("Reached the Core!", True, S.WHITE)
         self.screen.blit(r, r.get_rect(center=(S.WIDTH // 2, 430)))
-        self.draw_button(self.again_btn, "PLAY AGAIN", True, S.GOLD)
+        self.draw_button(self.again_btn, "BACK TO LOBBY" if self.online else "PLAY AGAIN",
+                         True, S.GOLD)
         self.draw_button(self.win_menu_btn, "MAIN MENU", True, (70, 110, 200))
 
     # ---------- drawing: menus ----------
@@ -626,11 +884,12 @@ class App:
         a = self.logo_font.render("SPIRAL", True, S.WHITE)
         b = self.logo_font.render("RACE", True, S.GOLD)
         bob = math.sin(self.time * 2) * 4
-        self.screen.blit(a, a.get_rect(center=(cx, 105 + bob)))
-        self.screen.blit(b, b.get_rect(center=(cx, 215 + bob)))
+        self.screen.blit(a, a.get_rect(center=(cx, 100 + bob)))
+        self.screen.blit(b, b.get_rect(center=(cx, 205 + bob)))
         s = self.head_font.render("Race to the Core", True, (170, 190, 235))
-        self.screen.blit(s, s.get_rect(center=(cx, 305)))
+        self.screen.blit(s, s.get_rect(center=(cx, 292)))
         self.draw_button(self.play_btn, "PLAY")
+        self.draw_button(self.online_btn, "ONLINE", True, S.GOLD)
         self.draw_button(self.how_btn, "HOW TO PLAY", True, (70, 110, 200))
         self.draw_button(self.exit_btn, "EXIT", True, S.RED)
 
@@ -664,23 +923,8 @@ class App:
             self.screen.blit(lt, lt.get_rect(midleft=(r.x + 80, r.centery)))
 
             nr = self.name_rect(i)
-            pygame.draw.rect(self.screen, (10, 16, 40), nr, border_radius=12)
-            border = S.GOLD if self.focus == i else (70, 92, 150)
-            pygame.draw.rect(self.screen, border, nr, 2, border_radius=12)
-            if row["name"]:
-                txt = row["name"]
-                tcol = S.WHITE
-            else:
-                txt = "Computer" if row["ai"] else f"Player {i + 1}"
-                tcol = (100, 115, 160)
-            caret = "|" if (self.focus == i and int(self.time * 2) % 2 == 0) else ""
-            if row["name"]:
-                txt += caret
-            ts = self.text_font.render(txt, True, tcol)
-            self.screen.blit(ts, ts.get_rect(midleft=(nr.x + 14, nr.centery)))
-            if not row["name"] and caret:
-                cs = self.text_font.render("|", True, S.WHITE)
-                self.screen.blit(cs, cs.get_rect(midleft=(nr.x + 8, nr.centery)))
+            ph = "Computer" if row["ai"] else f"Player {i + 1}"
+            self.draw_input(nr, row["name"], ph, self.focus == i)
 
             for k in range(4):
                 c = PLAYER_COLORS[COLOR_NAMES[k]]
@@ -698,6 +942,97 @@ class App:
         self.draw_button(self.setup_back, "BACK", True, (70, 110, 200))
         self.draw_button(self.setup_start, "START GAME", True, S.GREEN)
 
+    def draw_online_menu(self):
+        self.draw_menu_bg()
+        cx = S.WIDTH // 2
+        self.draw_title("PLAY ONLINE", 70)
+        lb = self.text_font.render("YOUR NAME", True, (170, 190, 235))
+        self.screen.blit(lb, (self.on_name.x, self.on_name.y - 28))
+        self.draw_input(self.on_name, self.net_name, "Player", self.net_focus == 0)
+        lb2 = self.text_font.render("ROOM CODE (only to join)", True, (170, 190, 235))
+        self.screen.blit(lb2, (self.on_code.x, self.on_code.y - 28))
+        self.draw_input(self.on_code, self.net_code, "ABCD", self.net_focus == 1)
+
+        busy = self.net.connecting
+        self.draw_button(self.on_create, "CREATE ROOM", not busy, S.GREEN)
+        self.draw_button(self.on_join, "JOIN ROOM", not busy, (70, 110, 200))
+
+        if busy:
+            dots = "." * (int(self.time * 3) % 4)
+            msg = f"Connecting{dots} {int(self.net.t)}s"
+            sub = "The free server may need up to a minute to wake up."
+            c1 = S.GOLD
+        else:
+            msg = self.net.error or self.net_msg
+            sub = ""
+            c1 = S.RED if (self.net.error or "left" in msg or "not" in msg
+                           or "full" in msg or "Disconnected" in msg) else S.WHITE
+        if msg:
+            t = self.text_font.render(msg, True, c1)
+            self.screen.blit(t, t.get_rect(center=(cx, 550)))
+        if sub:
+            t = self.small_font.render(sub, True, (150, 170, 215))
+            self.screen.blit(t, t.get_rect(center=(cx, 578)))
+        self.draw_button(self.on_back, "BACK", True, (70, 110, 200))
+
+    def draw_lobby(self):
+        self.draw_menu_bg()
+        cx = S.WIDTH // 2
+        self.draw_title("ROOM", 50)
+        code = self.lobby.get("code", "")
+        t = self.big_font.render(code, True, S.GOLD)
+        t = pygame.transform.smoothscale(t, (t.get_width() * 70 // 100, t.get_height() * 70 // 100))
+        self.screen.blit(t, t.get_rect(center=(cx, 125)))
+        link = self.invite_link().replace("https://", "")
+        lt = self.small_font.render("Invite link: " + link, True, (170, 190, 235))
+        self.screen.blit(lt, lt.get_rect(center=(cx, 190)))
+        sh = self.small_font.render("Share the code or the link with your friends (max 4 players)",
+                                    True, (150, 170, 215))
+        self.screen.blit(sh, sh.get_rect(center=(cx, 212)))
+
+        players = self.lobby.get("players", [])
+        taken = {int(p["color"]) for p in players}
+        for i, pl in enumerate(players):
+            r = self.lobby_row(i)
+            ui.draw_panel(self.screen, r)
+            ci = int(pl["color"]) % 4
+            color = PLAYER_COLORS[COLOR_NAMES[ci]]
+            nm = pl["name"] or "Player"
+            draw_token(self.screen, r.x + 36, r.centery - 2, color, nm[0].upper(),
+                       self.token_font, 17)
+            tag = ""
+            if i == 0:
+                tag += "  (HOST)"
+            if i == self.me:
+                tag += "  (YOU)"
+            ns = self.text_font.render(nm + tag, True, S.WHITE)
+            self.screen.blit(ns, ns.get_rect(midleft=(r.x + 68, r.centery)))
+            if i == self.me:
+                for k in range(4):
+                    c = PLAYER_COLORS[COLOR_NAMES[k]]
+                    sx, sy = self.lobby_swatch(i, k)
+                    used_by_other = k in taken and k != ci
+                    cc = theme.darken(c, 0.6) if used_by_other else c
+                    if k == ci:
+                        pygame.draw.circle(self.screen, S.WHITE, (sx, sy), 20)
+                    pygame.draw.circle(self.screen, theme.darken(cc, 0.3), (sx, sy), 16)
+                    pygame.draw.circle(self.screen, cc, (sx, sy), 13)
+
+        host = self.me == 0
+        can_start = host and len(players) >= 2
+        self.draw_button(self.lb_copy, "COPIED!" if self.copied_t > 0 else "COPY INVITE LINK",
+                         True, (70, 110, 200))
+        self.draw_button(self.lb_start, "START GAME", can_start, S.GREEN)
+        if host:
+            hint = "Waiting for friends to join..." if len(players) < 2 else "Everyone ready? Press START GAME."
+        else:
+            hint = "Waiting for the host to start the game..."
+        if self.net_msg:
+            hint = self.net_msg
+        h = self.small_font.render(hint, True, S.GOLD)
+        self.screen.blit(h, h.get_rect(center=(cx, 600)))
+        self.draw_button(self.lb_back, "LEAVE", True, S.RED)
+
     def draw_how(self):
         self.draw_menu_bg()
         self.draw_title("HOW TO PLAY", 70)
@@ -706,7 +1041,7 @@ class App:
             ("path", "Move along the spiral path"),
             ("green", "Green BOOST cells push you forward"),
             ("red", "Red TRAP cells push you backward"),
-            ("core", "Reach the Core (50) exactly to win"),
+            ("core", f"Reach the Core ({TOTAL_CELLS}) exactly to win"),
         ]
         navy = (52, 68, 112)
         for i, (kind, text) in enumerate(items):
@@ -736,6 +1071,10 @@ class App:
             self.draw_setup()
         elif self.state == S.HOW_TO_PLAY:
             self.draw_how()
+        elif self.state == ONLINE_MENU:
+            self.draw_online_menu()
+        elif self.state == ONLINE_LOBBY:
+            self.draw_lobby()
         elif self.state == S.GAME:
             self.screen.blit(self.bg, (0, 0))
             self.draw_board()
