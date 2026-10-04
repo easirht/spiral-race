@@ -2,6 +2,7 @@
 import asyncio
 import math
 import random
+import sys
 import pygame
 import settings as S
 import theme
@@ -9,6 +10,10 @@ import ui
 from board import Board, TOTAL_CELLS
 from player import Player, PLAYER_COLORS, draw_token
 from particles import Particles
+
+IS_WEB = sys.platform == "emscripten"
+if IS_WEB:
+    import platform
 
 COLOR_NAMES = ["Red", "Blue", "Green", "Yellow"]
 MAX_NAME = 12
@@ -52,6 +57,7 @@ class App:
         self.time = 0.0
 
         self.board = Board(400, 370, r_start=310)
+        self.seed = 0
         self.bg = theme.make_background(S.WIDTH, S.HEIGHT)
         self.spiral_deco = self.make_spiral_deco()
         self.glow_gold = theme.make_glow(110, S.GOLD, 140)
@@ -70,7 +76,6 @@ class App:
         self.win_t = 0.0
 
         cx = S.WIDTH // 2
-        # Buttons / rects
         self.roll_btn = pygame.Rect(820, 570, 400, 70)
         self.again_btn = pygame.Rect(cx - 130, 470, 260, 64)
         self.win_menu_btn = pygame.Rect(cx - 130, 550, 260, 64)
@@ -83,12 +88,10 @@ class App:
         self.setup_start = pygame.Rect(cx + 20, 620, 250, 64)
         self.how_back = pygame.Rect(cx - 130, 610, 260, 64)
 
-        # Ambient particles
         self.particles = [[random.uniform(0, S.WIDTH), random.uniform(0, S.HEIGHT),
                            random.uniform(8, 28), random.choice([1, 2, 2, 3]),
                            random.uniform(0, 6)] for _ in range(45)]
 
-        # Setup data
         self.setup = []
         self.n_humans = 2
         self.focus = 0
@@ -97,6 +100,7 @@ class App:
         self.phase = IDLE
         self.banner_t = 0.0
         self.banner = None
+        self.triggered = set()
 
     # ---------- decorative ----------
     def make_spiral_deco(self):
@@ -148,6 +152,9 @@ class App:
         self.state = S.GAME
 
     def reset_game(self):
+        # New random BOOST/TRAP layout every game
+        self.seed = random.randrange(1 << 30)
+        self.board.randomize(self.seed)
         start = self.board.get_cell(0)
         for p in self.players:
             p.position = 0
@@ -171,6 +178,7 @@ class App:
 
     def start_turn(self):
         self.phase = IDLE
+        self.triggered = set()
         self.timer = AI_THINK if self.cur().is_ai else 0.0
 
     def can_roll(self):
@@ -243,27 +251,31 @@ class App:
             self.fx.burst(p.x, p.y, S.WHITE, n=30, speed=200, gravity=120, life=(0.5, 1.0))
             self.fx.ring(p.x, p.y, S.GOLD, max_r=120, life=0.9)
             return
-        if self.phase == MOVING:
-            eff = self.board.get_cell(p.position).effect
-            if eff != 0:
-                self.pending = eff
-                if eff > 0:
-                    self.set_banner(f"BOOST! +{eff}", f"Move {eff} steps forward", S.GREEN, 1.4)
-                    self.fx.burst(p.x, p.y, S.GREEN, n=30, speed=190, gravity=-60)
-                    self.fx.ring(p.x, p.y, S.GREEN)
-                    self.do_flash((20, 120, 60))
-                else:
-                    self.set_banner(f"TRAP! {eff}", f"Move {-eff} steps backward", S.RED, 1.4)
-                    self.fx.burst(p.x, p.y, S.RED, n=30, speed=190, gravity=320)
-                    self.fx.ring(p.x, p.y, S.RED)
-                    self.do_flash((150, 25, 35))
-                self.phase = EFFECT_MSG
-                self.timer = EFFECT_TIME
-                return
-        elif self.phase == EFFECT_MOVING:
+
+        if self.phase == EFFECT_MOVING:
             col = S.GREEN if self.pending > 0 else S.RED
             self.fx.burst(p.x, p.y, col, n=12, speed=110)
-        # No chain reactions
+
+        # Chain reaction: the landing cell may trigger again,
+        # but each cell can trigger only once per turn (no infinite loops).
+        eff = self.board.get_cell(p.position).effect
+        if eff != 0 and p.position not in self.triggered:
+            self.triggered.add(p.position)
+            self.pending = eff
+            if eff > 0:
+                self.set_banner(f"BOOST! +{eff}", f"Move {eff} steps forward", S.GREEN, 1.4)
+                self.fx.burst(p.x, p.y, S.GREEN, n=30, speed=190, gravity=-60)
+                self.fx.ring(p.x, p.y, S.GREEN)
+                self.do_flash((20, 120, 60))
+            else:
+                self.set_banner(f"TRAP! {eff}", f"Move {-eff} steps backward", S.RED, 1.4)
+                self.fx.burst(p.x, p.y, S.RED, n=30, speed=190, gravity=320)
+                self.fx.ring(p.x, p.y, S.RED)
+                self.do_flash((150, 25, 35))
+            self.phase = EFFECT_MSG
+            self.timer = EFFECT_TIME
+            return
+
         self.phase = END_TURN
         self.timer = END_TURN_PAUSE
 
@@ -307,8 +319,27 @@ class App:
     def pick_color(self, i, c):
         for j, row in enumerate(self.setup):
             if j != i and row["color"] == c:
-                row["color"] = self.setup[i]["color"]  # swap, so no duplicates
+                row["color"] = self.setup[i]["color"]
         self.setup[i]["color"] = c
+
+    @staticmethod
+    def is_touch():
+        if not IS_WEB:
+            return False
+        try:
+            return bool(platform.window.matchMedia("(pointer: coarse)").matches)
+        except Exception:
+            return False
+
+    def ask_name(self, i):
+        """On phones there is no keyboard for the canvas, so use a popup box."""
+        row = self.setup[i]
+        try:
+            res = platform.window.prompt("Enter name (max 12 letters):", row["name"])
+        except Exception:
+            res = None
+        if res is not None:
+            row["name"] = str(res).strip()[:MAX_NAME]
 
     # ---------- input ----------
     @staticmethod
@@ -360,6 +391,9 @@ class App:
             for i in range(len(self.setup)):
                 if self.name_rect(i).collidepoint(event.pos):
                     self.focus = i
+                    if self.is_touch():
+                        self.ask_name(i)
+                        return
                 for k in range(4):
                     cx, cy = self.swatch_center(i, k)
                     if math.hypot(event.pos[0] - cx, event.pos[1] - cy) <= 22:
@@ -615,7 +649,7 @@ class App:
             r = self.row_rect(i)
             ui.draw_panel(self.screen, r)
             color = PLAYER_COLORS[COLOR_NAMES[row["color"]]]
-            shown = row["name"] or ("Computer" if row["ai"] else f"Player {i + 1}")
+            shown = row["name"].strip() or ("Computer" if row["ai"] else f"Player {i + 1}")
             draw_token(self.screen, r.x + 44, r.centery - 2, color, shown[0].upper(),
                        self.token_font, 18)
             if self.n_humans == 1:
@@ -635,10 +669,7 @@ class App:
             else:
                 txt = "Computer" if row["ai"] else f"Player {i + 1}"
                 tcol = (100, 115, 160)
-            if self.focus == i and int(self.time * 2) % 2 == 0:
-                caret = "|"
-            else:
-                caret = ""
+            caret = "|" if (self.focus == i and int(self.time * 2) % 2 == 0) else ""
             if row["name"]:
                 txt += caret
             ts = self.text_font.render(txt, True, tcol)
@@ -655,9 +686,10 @@ class App:
                 pygame.draw.circle(self.screen, theme.darken(c, 0.3), (sx, sy), 19)
                 pygame.draw.circle(self.screen, c, (sx, sy), 16)
                 pygame.draw.circle(self.screen, theme.lighten(c, 0.5), (sx - 5, sy - 5), 4)
-        hint = self.small_font.render(
-            "Click a name box and type. Colors can't repeat. Empty name = default.",
-            True, (150, 170, 215))
+        msg = ("Tap a name box to type your name. Colors can't repeat."
+               if self.is_touch() else
+               "Click a name box and type. Colors can't repeat. Empty name = default.")
+        hint = self.small_font.render(msg, True, (150, 170, 215))
         self.screen.blit(hint, hint.get_rect(center=(S.WIDTH // 2, 592)))
         self.draw_button(self.setup_back, "BACK", True, (70, 110, 200))
         self.draw_button(self.setup_start, "START GAME", True, S.GREEN)

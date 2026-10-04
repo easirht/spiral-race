@@ -1,18 +1,13 @@
 # board.py
 import math
+import random
 
 TOTAL_CELLS = 36
 
-# Special cells: position -> effect
+# Default effects (replaced by randomize() at the start of every game)
 SPECIAL_CELLS = {
-    5: 3,
-    9: -2,
-    13: 4,
-    17: -3,
-    21: 2,
-    25: -4,
-    29: 3,
-    32: -2,
+    5: 3, 9: -2, 13: 4, 17: -3,
+    21: 2, 25: -4, 29: 3, 32: -2,
 }
 
 
@@ -30,7 +25,6 @@ class Board:
         self.cy = center_y
         self.cells = []
 
-        # Archimedean spiral: radius shrinks to 0 at the core.
         theta_max = turns * 2 * math.pi
         b = r_start / theta_max
 
@@ -40,7 +34,6 @@ class Board:
             return (center_x + r * math.cos(angle),
                     center_y + r * math.sin(angle))
 
-        # Sample the whole path (outside -> centre) and measure its length.
         steps = 4000
         samples = []
         cumulative = [0.0]
@@ -53,7 +46,6 @@ class Board:
             samples.append(p)
         total = cumulative[-1]
 
-        # Place the 36 cells at equal distances along the path.
         gap = total / (TOTAL_CELLS - 1)
         idx = 0
         for i in range(TOTAL_CELLS):
@@ -65,12 +57,30 @@ class Board:
             effect = SPECIAL_CELLS.get(position, 0)
             self.cells.append(Cell(position, effect, x, y))
 
-        # Cell 36 is exactly at the core
         self.cells[-1].x = center_x
         self.cells[-1].y = center_y
 
+    def randomize(self, seed=None):
+        """Place 4 boosts and 4 traps randomly. Same seed = same layout."""
+        rng = random.Random(seed)
+        for c in self.cells:
+            c.effect = 0
+        candidates = list(range(3, 35))  # cells 3..34 only
+        rng.shuffle(candidates)
+        chosen = []
+        for pos in candidates:
+            if all(abs(pos - q) >= 2 for q in chosen):  # never side by side
+                chosen.append(pos)
+            if len(chosen) == 8:
+                break
+        chosen.sort()
+        values = [rng.choice([2, 3, 4]) for _ in range(4)]
+        values += [-rng.choice([2, 3, 4]) for _ in range(4)]
+        rng.shuffle(values)
+        for pos, val in zip(chosen, values):
+            self.cells[pos - 1].effect = val
+
     def get_cell(self, position):
-        # position 0 = start (before cell 1), placed to the right of cell 1
         if position <= 0:
             c = self.cells[0]
             return Cell(0, 0, c.x + 50, c.y)
