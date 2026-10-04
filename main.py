@@ -19,13 +19,17 @@ COLOR_NAMES = ["Red", "Blue", "Green", "Yellow"]
 MAX_NAME = 12
 
 # Timings (seconds)
-STEP_TIME = 0.12
+STEP_TIME = 0.10
 ROLL_TIME = 0.8
 AI_THINK = 0.8
 EFFECT_TIME = 0.8
 END_TURN_PAUSE = 0.35
 FLASH_TIME = 0.35
 CONFETTI_TIME = 4.0
+
+TILE = 42
+CORE_TILE = 58
+TOKEN_R = 15
 
 # Turn phases
 IDLE, ROLLING, MOVING, EFFECT_MSG, EFFECT_MOVING, END_TURN, WON = range(7)
@@ -38,8 +42,8 @@ class App:
         pygame.display.set_caption(S.TITLE)
         self.clock = pygame.time.Clock()
 
-        self.font = pygame.font.Font(None, 28)
-        self.small_font = pygame.font.Font(None, 18)
+        self.font = pygame.font.Font(None, 26)
+        self.small_font = pygame.font.Font(None, 16)
         self.core_font = pygame.font.Font(None, 20)
         self.token_font = pygame.font.Font(None, 22)
         self.text_font = pygame.font.Font(None, 30)
@@ -56,13 +60,14 @@ class App:
         self.running = True
         self.time = 0.0
 
-        self.board = Board(400, 370, r_start=310)
+        self.board = Board(400, 370)
+        self.board.randomize(0)
         self.seed = 0
         self.bg = theme.make_background(S.WIDTH, S.HEIGHT)
         self.spiral_deco = self.make_spiral_deco()
         self.glow_gold = theme.make_glow(110, S.GOLD, 140)
-        self.glow_green = theme.make_glow(34, S.GREEN, 90)
-        self.glow_red = theme.make_glow(34, S.RED, 90)
+        self.glow_green = theme.make_glow(32, S.GREEN, 90)
+        self.glow_red = theme.make_glow(32, S.RED, 90)
 
         self.panel = pygame.Surface((400, 560), pygame.SRCALPHA)
         pygame.draw.rect(self.panel, (18, 28, 60, 205), self.panel.get_rect(), border_radius=20)
@@ -256,8 +261,7 @@ class App:
             col = S.GREEN if self.pending > 0 else S.RED
             self.fx.burst(p.x, p.y, col, n=12, speed=110)
 
-        # Chain reaction: the landing cell may trigger again,
-        # but each cell can trigger only once per turn (no infinite loops).
+        # Chain reaction: each cell can trigger only once per turn.
         eff = self.board.get_cell(p.position).effect
         if eff != 0 and p.position not in self.triggered:
             self.triggered.add(p.position)
@@ -493,7 +497,7 @@ class App:
         self.screen.blit(g, g.get_rect(center=(core.x, core.y)))
 
         s = self.board.get_cell(0)
-        theme.draw_tile(self.screen, int(s.x), int(s.y), 40, S.GREEN, "GO", self.core_font)
+        theme.draw_tile(self.screen, int(s.x), int(s.y), TILE, S.GREEN, "GO", self.core_font)
 
         for c in cells:
             if c.position == TOTAL_CELLS:
@@ -508,10 +512,10 @@ class App:
                 color, glow, label = (52, 68, 112), None, None
             if glow:
                 self.screen.blit(glow, glow.get_rect(center=(c.x, c.y)))
-            theme.draw_tile(self.screen, int(c.x), int(c.y), 40, color,
+            theme.draw_tile(self.screen, int(c.x), int(c.y), TILE, color,
                             c.position, self.font, self.small_font, label)
 
-        theme.draw_tile(self.screen, int(core.x), int(core.y), 46, S.GOLD,
+        theme.draw_tile(self.screen, int(core.x), int(core.y), CORE_TILE, S.GOLD,
                         "CORE", self.core_font)
 
     def draw_tokens(self):
@@ -523,7 +527,7 @@ class App:
             ox, oy = offsets[idx] if shared else (0, 0)
             lift = self.hop if p is self.cur() and self.phase in (MOVING, EFFECT_MOVING) else 0
             draw_token(self.screen, p.x + ox, p.y + oy - 6, p.color, p.initial,
-                       self.token_font, 14, lift)
+                       self.token_font, TOKEN_R, lift)
 
     def draw_ui(self):
         a = self.title_font.render("SPIRAL", True, S.WHITE)
@@ -702,7 +706,7 @@ class App:
             ("path", "Move along the spiral path"),
             ("green", "Green BOOST cells push you forward"),
             ("red", "Red TRAP cells push you backward"),
-            ("core", "Reach the Core exactly to win"),
+            ("core", "Reach the Core (75) exactly to win"),
         ]
         navy = (52, 68, 112)
         for i, (kind, text) in enumerate(items):

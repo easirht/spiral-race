@@ -2,13 +2,9 @@
 import math
 import random
 
-TOTAL_CELLS = 36
-
-# Default effects (replaced by randomize() at the start of every game)
-SPECIAL_CELLS = {
-    5: 3, 9: -2, 13: 4, 17: -3,
-    21: 2, 25: -4, 29: 3, 32: -2,
-}
+TOTAL_CELLS = 75
+N_BOOST = 8
+N_TRAP = 8
 
 
 class Cell:
@@ -20,21 +16,23 @@ class Cell:
 
 
 class Board:
-    def __init__(self, center_x, center_y, r_start=285, turns=2.5):
+    def __init__(self, center_x, center_y, r_start=310, r_end=55, turns=3.5):
         self.cx = center_x
         self.cy = center_y
         self.cells = []
 
+        # Spiral from the outside (theta_max) to the inner ring (theta = 0).
+        # Cells 1..74 sit on the spiral at equal distances, cell 75 is the core.
         theta_max = turns * 2 * math.pi
-        b = r_start / theta_max
+        b = (r_start - r_end) / theta_max
 
         def point(theta):
-            r = b * theta
+            r = r_end + b * theta
             angle = -math.pi / 2 - theta
             return (center_x + r * math.cos(angle),
                     center_y + r * math.sin(angle))
 
-        steps = 4000
+        steps = 6000
         samples = []
         cumulative = [0.0]
         for k in range(steps + 1):
@@ -46,36 +44,36 @@ class Board:
             samples.append(p)
         total = cumulative[-1]
 
-        gap = total / (TOTAL_CELLS - 1)
+        n_path = TOTAL_CELLS - 1  # 74 cells on the spiral
+        gap = total / (n_path - 1)
         idx = 0
-        for i in range(TOTAL_CELLS):
+        for i in range(n_path):
             target = i * gap
             while idx < len(cumulative) - 1 and cumulative[idx] < target:
                 idx += 1
             x, y = samples[idx]
-            position = i + 1
-            effect = SPECIAL_CELLS.get(position, 0)
-            self.cells.append(Cell(position, effect, x, y))
+            self.cells.append(Cell(i + 1, 0, x, y))
 
-        self.cells[-1].x = center_x
-        self.cells[-1].y = center_y
+        # Cell 75 = core, exactly at the centre
+        self.cells.append(Cell(TOTAL_CELLS, 0, center_x, center_y))
 
     def randomize(self, seed=None):
-        """Place 4 boosts and 4 traps randomly. Same seed = same layout."""
+        """Place BOOST and TRAP cells randomly. Same seed = same layout."""
         rng = random.Random(seed)
         for c in self.cells:
             c.effect = 0
-        candidates = list(range(3, 35))  # cells 3..34 only
+        n = N_BOOST + N_TRAP
+        candidates = list(range(3, TOTAL_CELLS - 1))  # cells 3..74
         rng.shuffle(candidates)
         chosen = []
         for pos in candidates:
             if all(abs(pos - q) >= 2 for q in chosen):  # never side by side
                 chosen.append(pos)
-            if len(chosen) == 8:
+            if len(chosen) == n:
                 break
         chosen.sort()
-        values = [rng.choice([2, 3, 4]) for _ in range(4)]
-        values += [-rng.choice([2, 3, 4]) for _ in range(4)]
+        values = [rng.choice([2, 3, 4]) for _ in range(N_BOOST)]
+        values += [-rng.choice([2, 3, 4]) for _ in range(N_TRAP)]
         rng.shuffle(values)
         for pos, val in zip(chosen, values):
             self.cells[pos - 1].effect = val
@@ -83,5 +81,5 @@ class Board:
     def get_cell(self, position):
         if position <= 0:
             c = self.cells[0]
-            return Cell(0, 0, c.x + 50, c.y)
+            return Cell(0, 0, c.x + 56, c.y)
         return self.cells[position - 1]
