@@ -1,4 +1,4 @@
-﻿# net.py - WebSocket helper for the web build (polling, no callbacks)
+# net.py - WebSocket + share helper for the web build (polling, no callbacks)
 import json
 import sys
 
@@ -27,7 +27,14 @@ window.sr_pop=function(){ return window.sr.q.length ? window.sr.q.shift() : ''; 
 window.sr_close=function(){ try{ if(window.sr.ws){ window.sr.ws.onmessage=null; window.sr.ws.close(); } }catch(e){} window.sr.ws=null; window.sr.q=[]; };
 window.sr_warm=function(u){ try{ fetch(u,{mode:'no-cors'}); }catch(e){} };
 window.sr_copy=function(t){ try{ navigator.clipboard.writeText(t).catch(function(){ window.prompt('Copy this link:',t); }); }catch(e){ window.prompt('Copy this link:',t); } };
+window.sr_share=function(u,t){
+  try{
+    if(navigator.share){ navigator.share({title:'Spiral Race',text:t,url:u}).catch(function(){}); return 'shared'; }
+  }catch(e){}
+  window.sr_copy(u); return 'copied';
+};
 window.sr_room=function(){ try{ return (new URLSearchParams(window.location.search).get('room')||''); }catch(e){ return ''; } };
+window.sr_size=function(){ return window.innerWidth+','+window.innerHeight; };
 """
 
 
@@ -81,6 +88,18 @@ class Net:
         r = str(r or "").upper().strip()
         return r[:4] if r.isalpha() else ""
 
+    def window_size(self):
+        """Browser window size (w, h) or None when not on the web."""
+        if not IS_WEB:
+            return None
+        self._setup()
+        try:
+            s = str(self._js("sr_size"))
+            w, h = s.split(",")
+            return int(float(w)), int(float(h))
+        except Exception:
+            return None
+
     def connect(self, first_msg):
         self.error = ""
         self.pending = first_msg
@@ -101,6 +120,16 @@ class Net:
 
     def copy(self, text):
         self._js("sr_copy", text)
+
+    def share(self, url, text):
+        """Opens the phone share sheet, or copies the link. Returns 'shared', 'copied' or ''."""
+        if not IS_WEB:
+            return ""
+        self._setup()
+        try:
+            return str(self._js("sr_share", url, text) or "")
+        except Exception:
+            return ""
 
     def close(self):
         self.connecting = False

@@ -1,4 +1,4 @@
-# deploy.ps1 - build, patch canvas CSS + mobile helpers + share-preview tags, copy to docs
+# deploy.ps1 - build, patch page (canvas fit, share preview, title), copy to docs
 python -m pygbag --build .
 Copy-Item -Path build\web\* -Destination docs -Recurse -Force
 
@@ -31,31 +31,34 @@ $css = @'
     max-width:none !important; max-height:none !important;
     margin:0 !important; border:0 !important;
   }
-  #rotate-hint { display:none; }
-  @media (orientation:portrait) and (max-width:900px) {
-    #rotate-hint {
-      display:block; position:fixed; top:0; left:0; right:0; z-index:99999;
-      padding:14px 12px; text-align:center; pointer-events:none;
-      font:600 15px/1.35 system-ui,sans-serif; color:#ffd35a;
-      background:rgba(10,16,36,.94);
+  @media (orientation:portrait) {
+    canvas#canvas {
+      width:min(100vw, calc(100vh * 9 / 16)) !important;
+      height:min(100vh, calc(100vw * 16 / 9)) !important;
+    }
+  }
+  @supports (height: 100dvh) {
+    canvas#canvas {
+      width:min(100vw, calc(100dvh * 16 / 9)) !important;
+      height:min(100dvh, calc(100vw * 9 / 16)) !important;
+    }
+    @media (orientation:portrait) {
+      canvas#canvas {
+        width:min(100vw, calc(100dvh * 9 / 16)) !important;
+        height:min(100dvh, calc(100vw * 16 / 9)) !important;
+      }
     }
   }
 </style>
 '@
 
 $body = @'
-<div id="rotate-hint">&#8635; Rotate your phone sideways (landscape) for the best view</div>
 <script id="sr-mobile">
 (function(){
   var done=false;
   function go(){
     if(done) return; done=true;
-    try{
-      var el=document.documentElement;
-      var p=el.requestFullscreen?el.requestFullscreen():null;
-      var lock=function(){ try{ screen.orientation.lock('landscape').catch(function(){}); }catch(e){} };
-      if(p&&p.then){ p.then(lock).catch(function(){}); } else { lock(); }
-    }catch(e){}
+    try{ var el=document.documentElement; if(el.requestFullscreen){ el.requestFullscreen().catch(function(){}); } }catch(e){}
   }
   if(window.matchMedia && window.matchMedia('(pointer: coarse)').matches){
     window.addEventListener('touchend', go, {once:true});
@@ -69,6 +72,8 @@ $html = Get-Content $p -Raw
 $html = $html -replace '(?s)<!-- sr-meta -->.*?<!-- /sr-meta -->', ''
 $html = $html -replace '(?s)<style id="fit-fix">.*?</style>', ''
 $html = $html -replace '(?s)<div id="rotate-hint">.*?</div>\s*<script id="sr-mobile">.*?</script>', ''
+$html = $html -replace '(?s)<script id="sr-mobile">.*?</script>', ''
+$html = $html -replace '(?s)<title>.*?</title>', '<title>Spiral Race - Free Multiplayer Spiral Board Game</title>'
 $html = $html -replace '</head>', ($meta + "`n" + $css + "`n</head>")
 $html = $html -replace '</body>', ($body + "`n</body>")
 Set-Content -Path $p -Value $html -Encoding utf8
