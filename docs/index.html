@@ -296,6 +296,15 @@ function show_infobox() {
     max-width:none !important; max-height:none !important;
     margin:0 !important; border:0 !important;
   }
+  #rotate-hint { display:none; }
+  @media (orientation:portrait) and (max-width:900px) {
+    #rotate-hint {
+      display:block; position:fixed; top:0; left:0; right:0; z-index:99999;
+      padding:14px 12px; text-align:center; pointer-events:none;
+      font:600 15px/1.35 system-ui,sans-serif; color:#ffd35a;
+      background:rgba(10,16,36,.94);
+    }
+  }
 </style>
 </head>
 
@@ -445,6 +454,24 @@ frameborder="1"
 
     </script>
 
+<div id="rotate-hint">&#8635; Rotate your phone sideways (landscape) for the best view</div>
+<script id="sr-mobile">
+(function(){
+  var done=false;
+  function go(){
+    if(done) return; done=true;
+    try{
+      var el=document.documentElement;
+      var p=el.requestFullscreen?el.requestFullscreen():null;
+      var lock=function(){ try{ screen.orientation.lock('landscape').catch(function(){}); }catch(e){} };
+      if(p&&p.then){ p.then(lock).catch(function(){}); } else { lock(); }
+    }catch(e){}
+  }
+  if(window.matchMedia && window.matchMedia('(pointer: coarse)').matches){
+    window.addEventListener('touchend', go, {once:true});
+  }
+})();
+</script>
 </body>
 </html>
 
